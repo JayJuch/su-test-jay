@@ -9,8 +9,11 @@ import (
 const heartbeatInterval = 60 * time.Second
 
 type deviceRecord struct {
-	heartbeats  []time.Time
-	uploadTimes []time.Duration
+	firstBeat     time.Time
+	lastBeat      time.Time
+	beatCount     int
+	uploadCount   int
+	avgUploadTime time.Duration
 }
 
 type Server struct {
@@ -33,27 +36,38 @@ func (s *Server) IsValid(deviceID string) bool {
 
 func (s *Server) RecordHeartbeat(deviceID string, t time.Time) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	rec := s.getOrCreate(deviceID)
-	rec.heartbeats = append(rec.heartbeats, t)
-	s.mu.Unlock()
+	if rec.beatCount == 0 || t.Before(rec.firstBeat) {
+		rec.firstBeat = t
+	}
+	if rec.beatCount == 0 || t.After(rec.lastBeat) {
+		rec.lastBeat = t
+	}
+	rec.beatCount++
 }
 
 func (s *Server) RecordUploadTime(deviceID string, d time.Duration) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	rec := s.getOrCreate(deviceID)
-	rec.uploadTimes = append(rec.uploadTimes, d)
-	s.mu.Unlock()
+	rec.uploadCount++
+	rec.avgUploadTime += (d - rec.avgUploadTime) / time.Duration(rec.uploadCount)
 }
 
 func (s *Server) DeviceStats(deviceID string) (avgUpload string, uptime float64, hasData bool) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	rec := s.records[deviceID]
-	s.mu.RUnlock()
 
-	if rec == nil || (len(rec.heartbeats) == 0 && len(rec.uploadTimes) == 0) {
+	if rec == nil || (rec.beatCount == 0 && rec.uploadCount == 0) {
 		return "", 0, false
 	}
-	return calcAvgUploadTime(rec.uploadTimes), calcUptime(rec.heartbeats), true
+	avg := "0s"
+	if rec.uploadCount > 0 {
+		avg = rec.avgUploadTime.String()
+	}
+	return avg, calcUptime(rec.firstBeat, rec.lastBeat, rec.beatCount), true
 }
 
 func (s *Server) getOrCreate(deviceID string) *deviceRecord {
@@ -65,39 +79,16 @@ func (s *Server) getOrCreate(deviceID string) *deviceRecord {
 	return rec
 }
 
-func calcAvgUploadTime(uploads []time.Duration) string {
-	if len(uploads) == 0 {
-		return "0s"
-	}
-	var total time.Duration
-	for _, d := range uploads {
-		total += d
-	}
-	return (total / time.Duration(len(uploads))).String()
-}
-
 // calcUptime returns uptime as a percentage based on received vs expected
 // heartbeats, assuming a fixed heartbeatInterval between beats.
-func calcUptime(beats []time.Time) float64 {
-	if len(beats) == 0 {
+func calcUptime(first, last time.Time, count int) float64 {
+	if count == 0 {
 		return 0
 	}
-	if len(beats) == 1 {
+	if count == 1 {
 		return 100
 	}
-
-	first, last := beats[0], beats[0]
-	for _, t := range beats[1:] {
-		if t.Before(first) {
-			first = t
-		}
-		if t.After(last) {
-			last = t
-		}
-	}
-
 	elapsed := last.Sub(first)
 	expected := math.Round(elapsed.Seconds()/heartbeatInterval.Seconds()) + 1
-	actual := float64(len(beats))
-	return math.Min(100, (actual/expected)*100)
+	return math.Min(100, (float64(count)/expected)*100)
 }
