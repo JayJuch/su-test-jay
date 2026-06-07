@@ -1,0 +1,13 @@
+# Binaries
+cmd/fleet-monitor/fleet-monitor
+
+# Test output
+*.test
+coverage.out
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
