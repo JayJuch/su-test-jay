@@ -1,0 +1,7 @@
+FROM --platform=linux/arm64 alpine:3.22.4
+
+WORKDIR /app
+COPY device-simulator-linux-arm64 /app/device-simulator
+RUN chmod +x /app/device-simulator
+
+ENTRYPOINT ["/app/device-simulator"]
